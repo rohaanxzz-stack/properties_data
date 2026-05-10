@@ -4,186 +4,171 @@ from supabase import create_client
 from datetime import datetime
 
 # ============================================
-# PAGE CONFIG
+# 🛡️ ACCESS CONTROL (2 Editors vs Viewers)
 # ============================================
-st.set_page_config(
-    page_title="EstateLedger",
-    page_icon="🏠",
-    layout="wide"
-)
+# Only these passwords allow "Edit" access
+ADMIN_PASSWORDS = ["Jaffar123", "Tehseen456"] 
 
-st.title("🏠 EstateLedger")
-st.caption("Real Estate Record Management System")
+def check_access():
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    
+    with st.sidebar:
+        st.title("🔐 Access Control")
+        if not st.session_state.authenticated:
+            pwd = st.text_input("Enter Admin Password", type="password")
+            if st.button("Unlock Editor Mode"):
+                if pwd in ADMIN_PASSWORDS:
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("Access Denied")
+        else:
+            st.success("🔓 Editor Mode Active")
+            if st.button("Switch to Read-Only"):
+                st.session_state.authenticated = False
+                st.rerun()
+
+check_access()
+is_editor = st.session_state.authenticated
 
 # ============================================
-# SUPABASE CONNECTION (Safe Handling)
+# 🔗 SUPABASE CONNECTION
 # ============================================
 try:
-    SUPABASE_URL = st.secrets["SUPABASE_URL"]
-    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    st.error("Missing Supabase Secrets! Please check your secrets.toml or Streamlit Cloud settings.")
+    supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+except Exception:
+    st.error("Supabase credentials missing! Set them in Streamlit Cloud Secrets.")
     st.stop()
 
 # ============================================
-# SIDEBAR MENU
+# 📊 DATA LOADING & CALCULATIONS
 # ============================================
-menu = st.sidebar.selectbox(
-    "Select Menu",
-    ["Dashboard", "Add Property", "Sell Property", "Property Records", "Partner Profits", "Profit Usage"]
-)
+def load_all_data():
+    p_res = supabase.table("properties").select("*").execute()
+    u_res = supabase.table("profit_usage").select("*").execute()
+    prof_res = supabase.table("property_profits").select("*").execute()
+    return pd.DataFrame(p_res.data), pd.DataFrame(u_res.data), pd.DataFrame(prof_res.data)
 
-# ============================================
-# DASHBOARD
-# ============================================
-if menu == "Dashboard":
-    st.header("📊 Dashboard")
+df_p, df_u, df_profits = load_all_data()
 
-    response = supabase.table("properties").select("*").execute()
-    properties = response.data
+st.title("🏛️ EstateLedger")
+st.caption("Official Partner Income & Property Ledger")
 
-    if properties:
-        df = pd.DataFrame(properties)
-        
-        # Ensure numeric columns are treated as floats to prevent math errors
-        df["buying_price"] = pd.to_numeric(df["buying_price"], errors='coerce').fillna(0)
-        df["construction_cost"] = pd.to_numeric(df["construction_cost"], errors='coerce').fillna(0)
-        df["total_profit"] = pd.to_numeric(df["total_profit"], errors='coerce').fillna(0)
-
-        total_investment = df["buying_price"].sum() + df["construction_cost"].sum()
-        total_profit = df["total_profit"].sum()
-        net_worth = total_investment + total_profit
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Investment", f"PKR {total_investment:,.0f}")
-        col2.metric("Total Profit", f"PKR {total_profit:,.0f}")
-        col3.metric("Net Worth", f"PKR {net_worth:,.0f}")
-        col4.metric("Status", "Profit" if total_profit >= 0 else "Loss")
-
-        st.divider()
-        st.subheader("Quick View: Current Inventory")
-        st.dataframe(df[["property_name", "location", "status", "total_profit"]], use_container_width=True)
-    else:
-        st.info("No properties found. Go to 'Add Property' to begin.")
-
-# ============================================
-# ADD PROPERTY
-# ============================================
-elif menu == "Add Property":
-    st.header("➕ Add Property")
+if not df_p.empty:
+    # 1. Capital Locked (Inventory Cost)
+    unsold = df_p[df_p["status"] == "Unsold"]
+    capital_locked = unsold["buying_price"].sum() + unsold["construction_cost"].sum()
     
-    with st.form("property_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            property_name = st.text_input("Property Name")
-            location = st.text_input("Location")
-            dealer_name = st.text_input("Dealer Name")
-        with col2:
-            buying_price = st.number_input("Buying Price", min_value=0.0, step=1000.0)
-            construction_cost = st.number_input("Construction Cost", min_value=0.0, step=1000.0)
-            purchase_date = st.date_input("Purchase Date", datetime.now())
+    # 2. Total Earned Profit (After Sales)
+    total_earned = df_p["total_profit"].sum()
+    
+    # 3. Expenses (Profit used)
+    total_spent = df_u["amount"].sum() if not df_u.empty else 0
+    
+    # 4. Net Worth & Cash
+    cash_in_hand = total_earned - total_spent
+    current_net_worth = capital_locked + cash_in_hand
 
-        notes = st.text_area("Notes")
-        submit = st.form_submit_button("Save Property")
+    # Dashboard Metrics
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Capital in Houses", f"PKR {capital_locked:,.0f}")
+    m2.metric("Cash Balance (Profit)", f"PKR {cash_in_hand:,.0f}")
+    m3.metric("Total Net Worth", f"PKR {current_net_worth:,.0f}")
+    st.divider()
 
-        if submit:
-            if property_name and location:
-                data = {
-                    "property_name": property_name,
-                    "location": location,
-                    "buying_price": buying_price,
-                    "construction_cost": construction_cost,
-                    "dealer_name": dealer_name,
-                    "notes": notes,
-                    "purchase_date": str(purchase_date),
-                    "status": "Unsold",
-                    "selling_price": 0,
-                    "total_profit": 0
-                }
-                supabase.table("properties").insert(data).execute()
-                st.success(f"✅ {property_name} saved successfully!")
+# ============================================
+# 📂 NAVIGATION
+# ============================================
+menu = st.sidebar.radio("Go To", ["Active Inventory", "Sold Records", "Partner Profit Shares", "Expense Tracker"])
+
+# --- VIEW 1: ACTIVE INVENTORY ---
+if menu == "Active Inventory":
+    st.header("🏠 Current Property Inventory")
+    
+    if is_editor:
+        with st.expander("➕ Add New Purchase"):
+            with st.form("add_prop"):
+                name = st.text_input("Property/Project Name")
+                loc = st.text_input("Location")
+                dlr = st.text_input("Sourced from Dealer")
+                b_price = st.number_input("Buying Price", min_value=0.0)
+                c_price = st.number_input("Construction/renovation Cost", min_value=0.0)
+                if st.form_submit_button("Record Purchase"):
+                    # purchase_date is handled automatically by SQL NOW()
+                    supabase.table("properties").insert({
+                        "property_name": name, "location": loc, "dealer_name": dlr,
+                        "buying_price": b_price, "construction_cost": c_price, "status": "Unsold"
+                    }).execute()
+                    st.rerun()
+
+    if not df_p.empty:
+        active = df_p[df_p["status"] == "Unsold"][["purchase_date", "property_name", "location", "buying_price", "construction_cost"]]
+        st.dataframe(active, use_container_width=True)
+
+# --- VIEW 2: SOLD RECORDS ---
+elif menu == "Sold Records":
+    st.header("💰 History of Sold Properties")
+    
+    if is_editor:
+        with st.expander("🤝 Finalize a Sale"):
+            unsold_list = df_p[df_p["status"] == "Unsold"]["property_name"].tolist()
+            if unsold_list:
+                sel_p = st.selectbox("Select Property", unsold_list)
+                final_s = st.number_input("Final Selling Price", min_value=0.0)
+                if st.button("Confirm Sale & Calculate Profits"):
+                    # Get data of the selected property
+                    p_data = df_p[df_p["property_name"] == sel_p].iloc[0]
+                    total_inv = p_data["buying_price"] + p_data["construction_cost"]
+                    net_profit = final_s - total_inv
+                    
+                    # Update Main Table
+                    supabase.table("properties").update({
+                        "status": "Sold", "selling_price": final_s, 
+                        "selling_date": str(datetime.now()), "total_profit": net_profit
+                    }).eq("id", p_data["id"]).execute()
+                    
+                    # Distribute to Partners Table
+                    supabase.table("property_profits").insert({
+                        "property_id": p_data["id"], "property_name": sel_p,
+                        "total_profit": net_profit,
+                        "jaffar_profit": net_profit * 0.50,
+                        "tehseen_profit": net_profit * 0.40,
+                        "dealer_profit": net_profit * 0.10
+                    }).execute()
+                    st.rerun()
             else:
-                st.error("Property Name and Location are required.")
+                st.write("No unsold properties to sell.")
 
-# ============================================
-# SELL PROPERTY
-# ============================================
-# ============================================
-# SELL PROPERTY (Improved Error Handling)
-# ============================================
-elif menu == "Sell Property":
-    st.header("💰 Sell Property")
+    if not df_p.empty:
+        sold = df_p[df_p["status"] == "Sold"][["property_name", "purchase_date", "selling_date", "total_profit"]]
+        st.dataframe(sold, use_container_width=True)
 
-    try:
-        response = supabase.table("properties").select("*").eq("status", "Unsold").execute()
-        properties = response.data
-        
-        if properties:
-            # ... (rest of your selling logic)
-            st.write("Properties loaded successfully.")
-        else:
-            st.warning("No unsold properties found.")
-            
-    except Exception as e:
-        st.error("🔌 Connection Error: Could not reach the database.")
-        st.info("Check if your Supabase project is paused or if your internet is stable.")
-        # This prevents the traceback from scaring the user# ============================================
-# PROPERTY RECORDS & DELETE
-# ============================================
-elif menu == "Property Records":
-    st.header("📁 All Property Records")
-    response = supabase.table("properties").select("*").execute()
+# --- VIEW 3: PARTNER SHARES ---
+elif menu == "Partner Profit Shares":
+    st.header("👥 Individual Partner Ledgers")
     
-    if response.data:
-        df = pd.DataFrame(response.data)
-        st.dataframe(df, use_container_width=True)
+    if not df_profits.empty:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Jaffar (50%)", f"PKR {df_profits['jaffar_profit'].sum():,.0f}")
+        c2.metric("Tehseen (40%)", f"PKR {df_profits['tehseen_profit'].sum():,.0f}")
+        c3.metric("Dealer Pool (10%)", f"PKR {df_profits['dealer_profit'].sum():,.0f}")
         
-        st.divider()
-        st.subheader("🗑️ Delete a Record")
-        to_delete = st.selectbox("Select ID to delete", df["id"].tolist())
-        if st.button("Delete Permanently", type="primary"):
-            supabase.table("properties").delete().eq("id", to_delete).execute()
-            st.rerun()
+        st.subheader("Detailed Breakdown per House")
+        st.table(df_profits[["property_name", "jaffar_profit", "tehseen_profit", "dealer_profit"]])
     else:
-        st.info("No records found.")
+        st.info("No profits recorded yet.")
 
-# ============================================
-# PARTNER PROFITS
-# ============================================
-elif menu == "Partner Profits":
-    st.header("👥 Partner Profit Splits")
-    response = supabase.table("property_profits").select("*").execute()
-    
-    if response.data:
-        df = pd.DataFrame(response.data)
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Jaffar (50%)", f"PKR {df['jaffar_profit'].sum():,.0f}")
-        col2.metric("Tehseen (40%)", f"PKR {df['tehseen_profit'].sum():,.0f}")
-        col3.metric("Dealer (10%)", f"PKR {df['dealer_profit'].sum():,.0f}")
-        
-        st.dataframe(df, use_container_width=True)
-    else:
-        st.info("No sales records available to calculate profits.")
+# --- VIEW 4: EXPENSE TRACKER ---
+elif menu == "Expense Tracker":
+    st.header("💸 Where the Profit Went")
+    if is_editor:
+        with st.form("usage_form"):
+            t = st.text_input("Expense Title (e.g., Office Rent, New Plot Deposit)")
+            a = st.number_input("Amount", min_value=0.0)
+            if st.form_submit_button("Log Expense"):
+                supabase.table("profit_usage").insert({"title": t, "amount": a}).execute()
+                st.rerun()
 
-# ============================================
-# PROFIT USAGE
-# ============================================
-elif menu == "Profit Usage":
-    st.header("💸 Record Expense/Usage")
-    
-    with st.form("usage_form"):
-        title = st.text_input("Expense Title")
-        amount = st.number_input("Amount", min_value=0.0)
-        desc = st.text_area("Description")
-        if st.form_submit_button("Save Expense"):
-            supabase.table("profit_usage").insert({
-                "title": title, "amount": amount, "description": desc, "created_at": str(datetime.now())
-            }).execute()
-            st.success("Expense Recorded")
-            st.rerun()
-
-    res = supabase.table("profit_usage").select("*").execute()
-    if res.data:
-        st.table(pd.DataFrame(res.data))
+    if not df_u.empty:
+        st.dataframe(df_u[["created_at", "title", "amount"]], use_container_width=True)
