@@ -1,4 +1,4 @@
 streamlit
-supabase==2.4.6
+supabase
 pandas
 python-dotenv
