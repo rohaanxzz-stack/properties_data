@@ -1,9 +1,3 @@
-# ============================================
-# ESTATELEDGER
-# STREAMLIT + SUPABASE + PARTNER PROFITS
-# FULL GITHUB READY CODE
-# ============================================
-
 import streamlit as st
 import pandas as pd
 from supabase import create_client
@@ -12,9 +6,9 @@ from datetime import datetime
 # ============================================
 # PAGE CONFIG
 # ============================================
-
 st.set_page_config(
     page_title="EstateLedger",
+    page_icon="🏠",
     layout="wide"
 )
 
@@ -22,538 +16,203 @@ st.title("🏠 EstateLedger")
 st.caption("Real Estate Record Management System")
 
 # ============================================
-# SUPABASE CONNECTION
+# SUPABASE CONNECTION (Safe Handling)
 # ============================================
-
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-
-supabase = create_client(
-    SUPABASE_URL,
-    SUPABASE_KEY
-)
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    st.error("Missing Supabase Secrets! Please check your secrets.toml or Streamlit Cloud settings.")
+    st.stop()
 
 # ============================================
 # SIDEBAR MENU
 # ============================================
-
 menu = st.sidebar.selectbox(
     "Select Menu",
-    [
-        "Dashboard",
-        "Add Property",
-        "Sell Property",
-        "Property Records",
-        "Partner Profits",
-        "Profit Usage"
-    ]
+    ["Dashboard", "Add Property", "Sell Property", "Property Records", "Partner Profits", "Profit Usage"]
 )
 
 # ============================================
 # DASHBOARD
 # ============================================
-
 if menu == "Dashboard":
-
     st.header("📊 Dashboard")
 
-    response = supabase.table(
-        "properties"
-    ).select("*").execute()
-
+    response = supabase.table("properties").select("*").execute()
     properties = response.data
 
-    df = pd.DataFrame(properties)
+    if properties:
+        df = pd.DataFrame(properties)
+        
+        # Ensure numeric columns are treated as floats to prevent math errors
+        df["buying_price"] = pd.to_numeric(df["buying_price"], errors='coerce').fillna(0)
+        df["construction_cost"] = pd.to_numeric(df["construction_cost"], errors='coerce').fillna(0)
+        df["total_profit"] = pd.to_numeric(df["total_profit"], errors='coerce').fillna(0)
 
-    if not df.empty:
-
-        total_investment = (
-            df["buying_price"].sum()
-            + df["construction_cost"].sum()
-        )
-
-        total_profit = (
-            df["total_profit"].sum()
-        )
-
-        net_worth = (
-            total_investment
-            + total_profit
-        )
+        total_investment = df["buying_price"].sum() + df["construction_cost"].sum()
+        total_profit = df["total_profit"].sum()
+        net_worth = total_investment + total_profit
 
         col1, col2, col3, col4 = st.columns(4)
-
-        col1.metric(
-            "Total Investment",
-            f"PKR {total_investment:,.0f}"
-        )
-
-        col2.metric(
-            "Total Profit",
-            f"PKR {total_profit:,.0f}"
-        )
-
-        col3.metric(
-            "Net Worth",
-            f"PKR {net_worth:,.0f}"
-        )
-
-        col4.metric(
-            "Status",
-            "Profit"
-            if total_profit >= 0
-            else "Loss"
-        )
+        col1.metric("Total Investment", f"PKR {total_investment:,.0f}")
+        col2.metric("Total Profit", f"PKR {total_profit:,.0f}")
+        col3.metric("Net Worth", f"PKR {net_worth:,.0f}")
+        col4.metric("Status", "Profit" if total_profit >= 0 else "Loss")
 
         st.divider()
-
-        st.subheader("Property Records")
-
-        st.dataframe(df)
-
+        st.subheader("Quick View: Current Inventory")
+        st.dataframe(df[["property_name", "location", "status", "total_profit"]], use_container_width=True)
     else:
-        st.warning("No Properties Found")
+        st.info("No properties found. Go to 'Add Property' to begin.")
 
 # ============================================
 # ADD PROPERTY
 # ============================================
-
 elif menu == "Add Property":
-
     st.header("➕ Add Property")
+    
+    with st.form("property_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            property_name = st.text_input("Property Name")
+            location = st.text_input("Location")
+            dealer_name = st.text_input("Dealer Name")
+        with col2:
+            buying_price = st.number_input("Buying Price", min_value=0.0, step=1000.0)
+            construction_cost = st.number_input("Construction Cost", min_value=0.0, step=1000.0)
+            purchase_date = st.date_input("Purchase Date", datetime.now())
 
-    property_name = st.text_input(
-        "Property Name"
-    )
+        notes = st.text_area("Notes")
+        submit = st.form_submit_button("Save Property")
 
-    location = st.text_input(
-        "Location"
-    )
-
-    buying_price = st.number_input(
-        "Buying Price",
-        min_value=0.0
-    )
-
-    construction_cost = st.number_input(
-        "Construction Cost",
-        min_value=0.0
-    )
-
-    dealer_name = st.text_input(
-        "Dealer Name"
-    )
-
-    notes = st.text_area(
-        "Notes"
-    )
-
-    if st.button("Save Property"):
-
-        data = {
-
-            "property_name": property_name,
-
-            "location": location,
-
-            "buying_price": buying_price,
-
-            "construction_cost": construction_cost,
-
-            "dealer_name": dealer_name,
-
-            "notes": notes,
-
-            "purchase_date": str(
-                datetime.now()
-            ),
-
-            "status": "Unsold",
-
-            "selling_price": 0,
-
-            "total_profit": 0
-        }
-
-        supabase.table(
-            "properties"
-        ).insert(data).execute()
-
-        st.success(
-            "✅ Property Added Successfully"
-        )
+        if submit:
+            if property_name and location:
+                data = {
+                    "property_name": property_name,
+                    "location": location,
+                    "buying_price": buying_price,
+                    "construction_cost": construction_cost,
+                    "dealer_name": dealer_name,
+                    "notes": notes,
+                    "purchase_date": str(purchase_date),
+                    "status": "Unsold",
+                    "selling_price": 0,
+                    "total_profit": 0
+                }
+                supabase.table("properties").insert(data).execute()
+                st.success(f"✅ {property_name} saved successfully!")
+            else:
+                st.error("Property Name and Location are required.")
 
 # ============================================
 # SELL PROPERTY
 # ============================================
-
 elif menu == "Sell Property":
-
     st.header("💰 Sell Property")
 
-    response = supabase.table(
-        "properties"
-    ).select("*").eq(
-        "status",
-        "Unsold"
-    ).execute()
-
+    response = supabase.table("properties").select("*").eq("status", "Unsold").execute()
     properties = response.data
 
     if properties:
+        property_options = {p["property_name"]: p for p in properties}
+        selected_name = st.selectbox("Select Property to Sell", list(property_options.keys()))
+        
+        prop = property_options[selected_name]
+        st.write(f"**Initial Investment:** PKR {prop['buying_price'] + prop['construction_cost']:,.0f}")
+        
+        selling_price = st.number_input("Selling Price", min_value=0.0, step=5000.0)
+        
+        if st.button("Confirm Sale"):
+            total_expense = prop["buying_price"] + prop["construction_cost"]
+            total_profit = selling_price - total_expense
 
-        property_options = {
-            p["property_name"]: p["id"]
-            for p in properties
-        }
+            # 50/40/10 Split
+            jaffar_p = total_profit * 0.50
+            tehseen_p = total_profit * 0.40
+            dealer_p = total_profit * 0.10
 
-        selected_property = st.selectbox(
-            "Select Property",
-            list(property_options.keys())
-        )
-
-        selling_price = st.number_input(
-            "Selling Price",
-            min_value=0.0
-        )
-
-        if st.button("Mark As Sold"):
-
-            property_id = property_options[
-                selected_property
-            ]
-
-            property_data = next(
-                p for p in properties
-                if p["id"] == property_id
-            )
-
-            total_expense = (
-                property_data["buying_price"]
-                + property_data["construction_cost"]
-            )
-
-            total_profit = (
-                selling_price
-                - total_expense
-            )
-
-            # =====================================
-            # PARTNER PROFIT DISTRIBUTION
-            # =====================================
-
-            jaffar_profit = total_profit * 0.50
-            tehseen_profit = total_profit * 0.40
-            dealer_profit = total_profit * 0.10
-
-            # =====================================
-            # UPDATE PROPERTY
-            # =====================================
-
-            supabase.table(
-                "properties"
-            ).update({
-
+            # Update Property Status
+            supabase.table("properties").update({
                 "status": "Sold",
-
                 "selling_price": selling_price,
-
-                "selling_date": str(
-                    datetime.now()
-                ),
-
+                "selling_date": str(datetime.now()),
                 "total_profit": total_profit
+            }).eq("id", prop["id"]).execute()
 
-            }).eq(
-                "id",
-                property_id
-            ).execute()
-
-            # =====================================
-            # SAVE PARTNER PROFITS
-            # =====================================
-
+            # Insert into Profits Table
             profit_data = {
-
-                "property_id": property_id,
-
-                "property_name":
-                selected_property,
-
-                "total_profit":
-                total_profit,
-
-                "jaffar_profit":
-                jaffar_profit,
-
-                "tehseen_profit":
-                tehseen_profit,
-
-                "dealer_profit":
-                dealer_profit
+                "property_id": prop["id"],
+                "property_name": selected_name,
+                "total_profit": total_profit,
+                "jaffar_profit": jaffar_p,
+                "tehseen_profit": tehseen_p,
+                "dealer_profit": dealer_p
             }
+            supabase.table("property_profits").insert(profit_data).execute()
 
-            supabase.table(
-                "property_profits"
-            ).insert(
-                profit_data
-            ).execute()
-
-            st.success(
-                "✅ Property Sold & Profits Distributed"
-            )
-
-            st.info(
-                f"""
-                Jaffar Profit: PKR {jaffar_profit:,.0f}
-
-                Tehseen Profit: PKR {tehseen_profit:,.0f}
-
-                Dealer Profit: PKR {dealer_profit:,.0f}
-                """
-            )
-
+            st.success(f"✅ Sold! Profit: PKR {total_profit:,.0f}")
+            st.balloons()
     else:
-        st.warning(
-            "No Unsold Properties Found"
-        )
+        st.warning("All properties are sold or none exist.")
 
 # ============================================
-# PROPERTY RECORDS
+# PROPERTY RECORDS & DELETE
 # ============================================
-
 elif menu == "Property Records":
-
-    st.header("📁 Property Records")
-
-    response = supabase.table(
-        "properties"
-    ).select("*").execute()
-
-    properties = response.data
-
-    if properties:
-
-        df = pd.DataFrame(properties)
-
-        st.dataframe(
-            df,
-            use_container_width=True
-        )
-
+    st.header("📁 All Property Records")
+    response = supabase.table("properties").select("*").execute()
+    
+    if response.data:
+        df = pd.DataFrame(response.data)
+        st.dataframe(df, use_container_width=True)
+        
+        st.divider()
+        st.subheader("🗑️ Delete a Record")
+        to_delete = st.selectbox("Select ID to delete", df["id"].tolist())
+        if st.button("Delete Permanently", type="primary"):
+            supabase.table("properties").delete().eq("id", to_delete).execute()
+            st.rerun()
     else:
-        st.warning(
-            "No Records Found"
-        )
+        st.info("No records found.")
 
 # ============================================
 # PARTNER PROFITS
 # ============================================
-
 elif menu == "Partner Profits":
-
-    st.header("👥 Partner Profits")
-
-    response = supabase.table(
-        "property_profits"
-    ).select("*").execute()
-
-    profits = response.data
-
-    if profits:
-
-        df = pd.DataFrame(profits)
-
-        total_jaffar = (
-            df["jaffar_profit"].sum()
-        )
-
-        total_tehseen = (
-            df["tehseen_profit"].sum()
-        )
-
-        total_dealer = (
-            df["dealer_profit"].sum()
-        )
-
+    st.header("👥 Partner Profit Splits")
+    response = supabase.table("property_profits").select("*").execute()
+    
+    if response.data:
+        df = pd.DataFrame(response.data)
+        
         col1, col2, col3 = st.columns(3)
-
-        col1.metric(
-            "Jaffar Total Profit",
-            f"PKR {total_jaffar:,.0f}"
-        )
-
-        col2.metric(
-            "Tehseen Total Profit",
-            f"PKR {total_tehseen:,.0f}"
-        )
-
-        col3.metric(
-            "Dealer Total Profit",
-            f"PKR {total_dealer:,.0f}"
-        )
-
-        st.divider()
-
-        st.dataframe(df)
-
+        col1.metric("Jaffar (50%)", f"PKR {df['jaffar_profit'].sum():,.0f}")
+        col2.metric("Tehseen (40%)", f"PKR {df['tehseen_profit'].sum():,.0f}")
+        col3.metric("Dealer (10%)", f"PKR {df['dealer_profit'].sum():,.0f}")
+        
+        st.dataframe(df, use_container_width=True)
     else:
-        st.warning(
-            "No Profit Records Found"
-        )
+        st.info("No sales records available to calculate profits.")
 
 # ============================================
 # PROFIT USAGE
 # ============================================
-
 elif menu == "Profit Usage":
+    st.header("💸 Record Expense/Usage")
+    
+    with st.form("usage_form"):
+        title = st.text_input("Expense Title")
+        amount = st.number_input("Amount", min_value=0.0)
+        desc = st.text_area("Description")
+        if st.form_submit_button("Save Expense"):
+            supabase.table("profit_usage").insert({
+                "title": title, "amount": amount, "description": desc, "created_at": str(datetime.now())
+            }).execute()
+            st.success("Expense Recorded")
+            st.rerun()
 
-    st.header("💸 Profit Usage")
-
-    title = st.text_input(
-        "Usage Title"
-    )
-
-    amount = st.number_input(
-        "Amount",
-        min_value=0.0
-    )
-
-    description = st.text_area(
-        "Description"
-    )
-
-    if st.button("Save Usage"):
-
-        usage_data = {
-
-            "title": title,
-
-            "amount": amount,
-
-            "description": description,
-
-            "created_at": str(
-                datetime.now()
-            )
-        }
-
-        supabase.table(
-            "profit_usage"
-        ).insert(
-            usage_data
-        ).execute()
-
-        st.success(
-            "✅ Profit Usage Saved"
-        )
-
-    response = supabase.table(
-        "profit_usage"
-    ).select("*").execute()
-
-    usage = response.data
-
-    if usage:
-
-        usage_df = pd.DataFrame(usage)
-
-        st.dataframe(usage_df)
-
-# ============================================
-# SUPABASE SQL
-# RUN THIS IN SQL EDITOR
-# ============================================
-
-"""
-CREATE TABLE properties (
-
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-
-    property_name TEXT,
-
-    location TEXT,
-
-    buying_price NUMERIC DEFAULT 0,
-
-    construction_cost NUMERIC DEFAULT 0,
-
-    dealer_name TEXT,
-
-    notes TEXT,
-
-    purchase_date TIMESTAMP DEFAULT NOW(),
-
-    status TEXT DEFAULT 'Unsold',
-
-    selling_price NUMERIC DEFAULT 0,
-
-    selling_date TIMESTAMP,
-
-    total_profit NUMERIC DEFAULT 0
-
-);
-
-CREATE TABLE property_profits (
-
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-
-    property_id BIGINT REFERENCES properties(id)
-    ON DELETE CASCADE,
-
-    property_name TEXT,
-
-    total_profit NUMERIC DEFAULT 0,
-
-    jaffar_profit NUMERIC DEFAULT 0,
-
-    tehseen_profit NUMERIC DEFAULT 0,
-
-    dealer_profit NUMERIC DEFAULT 0,
-
-    created_at TIMESTAMP DEFAULT NOW()
-
-);
-
-CREATE TABLE profit_usage (
-
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-
-    title TEXT,
-
-    amount NUMERIC DEFAULT 0,
-
-    description TEXT,
-
-    created_at TIMESTAMP DEFAULT NOW()
-
-);
-"""
-
-# ============================================
-# .streamlit/secrets.toml
-# ============================================
-
-"""
-SUPABASE_URL = "YOUR_SUPABASE_URL"
-
-SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY"
-"""
-
-# ============================================
-# requirements.txt
-# ============================================
-
-"""
-streamlit
-supabase
-pandas
-"""
-
-# ============================================
-# RUN COMMAND
-# ============================================
-
-"""
-streamlit run app.py
-"""
+    res = supabase.table("profit_usage").select("*").execute()
+    if res.data:
+        st.table(pd.DataFrame(res.data))
